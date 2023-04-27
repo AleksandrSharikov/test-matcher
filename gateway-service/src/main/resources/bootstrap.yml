@@ -1,0 +1,82 @@
+server:
+  port: 8080
+
+spring:
+  main:
+    allow-bean-definition-overriding: true
+    web-application-type: reactive
+  application:
+    name: gateway-service
+  cloud:
+    config:
+      uri: http://localhost:8888
+      profile: dev
+      discovery:
+        enabled: false
+        service-id: config-server
+    gateway:
+      default-filters:
+        - TokenRelay
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+      routes:
+
+
+        #Регистрация main-module
+        - id: main-module
+          uri: lb://main-module
+          predicates:
+            - Path=/main-module/**
+          filters:
+            - StripPrefix=1
+            - name: Retry
+
+
+        #Регистрация  config
+        - id: server
+          uri: lb://server
+          predicates:
+            - Path=/server/**
+          filters:
+            - StripPrefix=1
+            - name: Retry
+              # noinspection SpringBootApplicationYaml
+              # ругается но работает
+              args:
+                retries: 4
+                statuses: BAD_GATEWAY
+                methods: GET,POST
+                backoff:
+                  firstBackoff: 10ms
+                  maxBackoff: 50ms
+                  factor: 2
+                  basedOnPreviousValue: false
+
+  security:
+    oauth2:
+      client:
+        provider:
+          my-keycloak-provider:
+            issuer-uri: http://localhost:8890/realms/project-realm
+        registration:
+          keycloak-spring-gateway-client:
+            provider: my-keycloak-provider
+            scope: openid
+            client-id: gateway-client
+            client-secret: Gyo45aIz0hUFYz2pgN3uwevEVvUDvOhT
+            authorization-grant-type: authorization_code
+            redirect-uri: http://localhost:8080/login/oauth2/code/gateway-client
+
+logging:
+  level:
+    org:
+      springframework:
+        security:
+          web: DEBUG
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"

@@ -1,0 +1,144 @@
+services:
+  server:
+    container_name: eureka
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - 8761:8761
+  config:
+    container_name: config
+    build:
+      context: ./config
+      dockerfile: Dockerfile
+    environment:
+      - eureka.client.service-url.defaultZone=http://server:8761/eureka/
+    depends_on:
+      - server
+  gateway-service:
+    container_name: gateway
+    build:
+      context: ./gateway-service
+      dockerfile: Dockerfile
+    environment:
+      - eureka.client.service-url.defaultZone=http://server:8761/eureka/
+      - spring.config.import=optional:configserver:http://config:8888
+      - spring.security.oauth2.client.provider.my-keycloak-provider.issuer-uri=http://host.docker.internal:8890/realms/project-realm
+    depends_on:
+      config:
+        condition:
+          service_started
+      keycloak:
+        condition:
+          service_healthy
+    ports:
+      - 8080:8080
+  postgres:
+    image: postgres
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
+    ports:
+      - 5432:5432
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    hostname: rabbitmq
+    restart: always
+    environment:
+      - RABBITMQ_DEFAULT_USER=rm
+      - RABBITMQ_DEFAULT_PASS=rmp
+    ports:
+      - 15672:15672
+      - 5672:5672
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:18.0.0
+    command: ['start-dev --import-realm']
+    volumes:
+      - ./keycloak-server/realm-export.json:/opt/keycloak/data/import/realm-export.json
+    environment:
+      DB_VENDOR: POSTGRES
+      DB_ADDR: postgres_keycloak
+      DB_DATABASE: keycloak
+      DB_USER: keycloak
+      DB_PASSWORD: password
+      KC_DB_SCHEMA: public
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8890:8080"
+    depends_on:
+      postgres_keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://0.0.0.0:8080/realms/master"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 1m
+    networks:
+      - keycloak_dev_network
+
+  postgres_keycloak:
+    image: postgres:14.2
+    command: postgres -c 'max_connections=200'
+    volumes:
+      - pgdata_keycloak:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: password
+    healthcheck:
+      test: "exit 0"
+    ports:
+      - "5436:5432"
+    networks:
+      - keycloak_dev_network
+
+  main-module:
+    build:
+      context: ./main-module
+      dockerfile: Dockerfile
+    environment:
+      - eureka.client.service-url.defaultZone=http://server:8761/eureka/
+      - spring.config.import=optional:configserver:http://config:8888
+      - spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://host.docker.internal:8890/realms/project-realm/protocol/openid-connect/certs
+      - spring.cloud.config.profile=dev
+    depends_on:
+      - gateway-service
+      - postgres
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.0.1
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+  kafka:
+    image: confluentinc/cp-kafka:7.0.1
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      #      ALLOW_PLAINTEXT_LISTENER=yes
+      #      KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://broker:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+volumes:
+  pgdata_keycloak:
+    name: keycloak_postgres_data
+    driver: local
+  kafka-volume:
+  zookeeper-volume:
+networks:
+  keycloak_dev_network:
+    driver: bridge
