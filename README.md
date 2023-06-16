@@ -1,2 +1,2 @@
 # test-matcher
-unfinished project to handle a shadule of exams
+Spring boot project to create and handle exam schedules. Uses Postgresql and REST controllers.
